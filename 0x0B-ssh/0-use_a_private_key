@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 # Se connecte au serveur distant en utilisant la clé privée ~/.ssh/school et l'utilisateur ubuntu
 
-ssh ubuntu@44.202.102.35 -i ~/.ssh/school
+ssh ubuntu@54.234.4.49 -i ~/.ssh/school
