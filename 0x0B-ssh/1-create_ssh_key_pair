@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Ce script crée une paire de clés RSA de 4096 bits nommée 'school', protégée par le mot de passe 'betty'
+
+ssh-keygen -t rsa -b 4096 -f school -N "betty"
