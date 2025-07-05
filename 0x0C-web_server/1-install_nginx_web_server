@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Installs Nginx and configures the default page to say "Hello World!"
+
+# Install nginx if not installed
+apt-get update -y
+apt-get install nginx -y
+
+# Replace default page content with Hello World!
+echo "Hello World!" > /var/www/html/index.html
+
+# Restart Nginx without systemctl
+service nginx restart
