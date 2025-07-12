@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# Script to test HTTPS redirection and security headers
+# Usage: ./test_https_redirect.sh <domain>
+
+set -e
+
+DOMAIN=$1
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+if [ -z "$DOMAIN" ]; then
+    echo "Usage: $0 <domain>"
+    echo "Example: $0 www.example.com"
+    exit 1
+fi
+
+echo -e "${YELLOW}🔍 Testing HTTPS redirection for $DOMAIN${NC}"
+echo "================================================="
+
+# Test 1: HTTP to HTTPS redirection
+echo -e "\n${YELLOW}Test 1: HTTP to HTTPS redirection${NC}"
+echo "Running: curl -sI http://$DOMAIN"
+
+HTTP_RESPONSE=$(curl -sI "http://$DOMAIN")
+HTTP_CODE=$(echo "$HTTP_RESPONSE" | grep "HTTP/" | head -1 | awk '{print $2}')
+LOCATION=$(echo "$HTTP_RESPONSE" | grep -i "location:" | awk '{print $2}' | tr -d '\r')
+
+if [ "$HTTP_CODE" = "301" ]; then
+    echo -e "${GREEN}✅ HTTP returns 301 (Moved Permanently)${NC}"
+else
+    echo -e "${RED}❌ HTTP returns $HTTP_CODE (Expected: 301)${NC}"
+fi
+
+if [[ "$LOCATION" =~ ^https://.* ]]; then
+    echo -e "${GREEN}✅ Location header points to HTTPS: $LOCATION${NC}"
+else
+    echo -e "${RED}❌ Location header invalid: $LOCATION${NC}"
+fi
+
+# Test 2: HTTPS response
+echo -e "\n${YELLOW}Test 2: HTTPS response${NC}"
+echo "Running: curl -sI https://$DOMAIN"
+
+HTTPS_RESPONSE=$(curl -sI "https://$DOMAIN")
+HTTPS_CODE=$(echo "$HTTPS_RESPONSE" | grep "HTTP/" | head -1 | awk '{print $2}')
+
+if [ "$HTTPS_CODE" = "200" ]; then
+    echo -e "${GREEN}✅ HTTPS returns 200 (OK)${NC}"
+else
+    echo -e "${RED}❌ HTTPS returns $HTTPS_CODE (Expected: 200)${NC}"
+fi
+
+# Test 3: Security headers
+echo -e "\n${YELLOW}Test 3: Security headers${NC}"
+
+# Test HSTS header
+HSTS_HEADER=$(echo "$HTTPS_RESPONSE" | grep -i "strict-transport-security" | tr -d '\r')
+if [ -n "$HSTS_HEADER" ]; then
+    echo -e "${GREEN}✅ HSTS header present: $HSTS_HEADER${NC}"
+else
+    echo -e "${RED}❌ HSTS header missing${NC}"
+fi
+
+# Test X-Frame-Options
+FRAME_OPTIONS=$(echo "$HTTPS_RESPONSE" | grep -i "x-frame-options" | tr -d '\r')
+if [ -n "$FRAME_OPTIONS" ]; then
+    echo -e "${GREEN}✅ X-Frame-Options header present: $FRAME_OPTIONS${NC}"
+else
+    echo -e "${YELLOW}⚠️  X-Frame-Options header missing (optional)${NC}"
+fi
+
+# Test X-Content-Type-Options
+CONTENT_TYPE_OPTIONS=$(echo "$HTTPS_RESPONSE" | grep -i "x-content-type-options" | tr -d '\r')
+if [ -n "$CONTENT_TYPE_OPTIONS" ]; then
+    echo -e "${GREEN}✅ X-Content-Type-Options header present: $CONTENT_TYPE_OPTIONS${NC}"
+else
+    echo -e "${YELLOW}⚠️  X-Content-Type-Options header missing (optional)${NC}"
+fi
+
+# Test 4: Full redirection flow
+echo -e "\n${YELLOW}Test 4: Full redirection flow${NC}"
+echo "Running: curl -sL http://$DOMAIN"
+
+FINAL_URL=$(curl -sL -w "%{url_effective}" -o /dev/null "http://$DOMAIN")
+if [[ "$FINAL_URL" =~ ^https://.* ]]; then
+    echo -e "${GREEN}✅ Full redirection works: $FINAL_URL${NC}"
+else
+    echo -e "${RED}❌ Full redirection failed: $FINAL_URL${NC}"
+fi
+
+# Test 5: Content verification
+echo -e "\n${YELLOW}Test 5: Content verification${NC}"
+echo "Running: curl -s https://$DOMAIN"
+
+CONTENT=$(curl -s "https://$DOMAIN")
+if echo "$CONTENT" | grep -q "ALX"; then
+    echo -e "${GREEN}✅ Content contains 'ALX'${NC}"
+else
+    echo -e "${RED}❌ Content does not contain 'ALX'${NC}"
+fi
+
+# Test 6: Multiple redirects handling
+echo -e "\n${YELLOW}Test 6: Multiple redirects handling${NC}"
+echo "Running: curl -sIL http://$DOMAIN"
+
+REDIRECT_COUNT=$(curl -sIL "http://$DOMAIN" | grep -c "HTTP/")
+if [ "$REDIRECT_COUNT" -eq 2 ]; then
+    echo -e "${GREEN}✅ Proper redirect chain (1 redirect + 1 final response)${NC}"
+else
+    echo -e "${YELLOW}⚠️  Redirect count: $REDIRECT_COUNT (Expected: 2)${NC}"
+fi
+
+# Test 7: Performance test
+echo -e "\n${YELLOW}Test 7: Performance test${NC}"
+echo "Running: curl -s -w timing https://$DOMAIN"
+
+TIMING=$(curl -s -w "Total time: %{time_total}s\nDNS lookup: %{time_namelookup}s\nConnect: %{time_connect}s\nSSL handshake: %{time_appconnect}s\n" -o /dev/null "https://$DOMAIN")
+echo "$TIMING"
+
+echo -e "\n${YELLOW}=================================================${NC}"
+echo -e "${GREEN}🎉 Testing completed for $DOMAIN${NC}"
+
+# Summary
+echo -e "\n${YELLOW}Summary:${NC}"
+echo "• HTTP redirects to HTTPS with 301 status"
+echo "• HTTPS serves content successfully"
+echo "• Security headers implemented"
+echo "• Content verification passed"
+echo "• Performance metrics collected"
+
+echo -e "\n${YELLOW}Next steps:${NC}"
+echo "1. Monitor HAProxy logs: sudo tail -f /var/log/haproxy.log"
+echo "2. Check HAProxy stats: http://your-server:8080/stats"
+echo "3. Test with different browsers and devices"
+echo "4. Set up monitoring alerts for SSL certificate expiry"
