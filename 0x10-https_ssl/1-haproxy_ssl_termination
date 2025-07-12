@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Script to setup SSL termination with HAProxy
+# Usage: ./setup_ssl_termination.sh <domain> <web01_ip> <web02_ip>
+
+set -e
+
+DOMAIN=$1
+WEB01_IP=$2
+WEB02_IP=$3
+
+# Validation des paramètres
+if [ -z "$DOMAIN" ] || [ -z "$WEB01_IP" ] || [ -z "$WEB02_IP" ]; then
+    echo "Usage: $0 <domain> <web01_ip> <web02_ip>"
+    echo "Example: $0 www.example.com 192.168.1.10 192.168.1.11"
+    exit 1
+fi
+
+echo "🚀 Setting up SSL termination for $DOMAIN"
+
+# Installation des dépendances
+echo "📦 Installing dependencies..."
+sudo apt update
+sudo apt install -y haproxy certbot
+
+# Arrêt temporaire de HAProxy
+echo "🛑 Stopping HAProxy..."
+sudo systemctl stop haproxy 2>/dev/null || true
+
+# Génération du certificat
+echo "🔐 Generating SSL certificate..."
+sudo certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos --email admin@"${DOMAIN#www.}"
+
+# Création du fichier PEM
+echo "📝 Creating PEM file..."
+sudo cat "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" \
+         "/etc/letsencrypt/live/$DOMAIN/privkey.pem" \
+         > "/etc/ssl/certs/$DOMAIN.pem"
+
+# Permissions
+sudo chmod 600 "/etc/ssl/certs/$DOMAIN.pem"
+sudo chown haproxy:haproxy "/etc/ssl/certs/$DOMAIN.pem"
+
+# Sauvegarde de la config existante
+echo "💾 Backing up existing config..."
+sudo cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.backup
+
+# Création de la nouvelle configuration
+echo "⚙️  Creating HAProxy configuration..."
+sudo tee /etc/haproxy/haproxy.cfg > /dev/null <<EOF
+global
+    daemon
+    maxconn 2048
+    user haproxy
+    group haproxy
+    
+    # SSL/TLS configuration
+    tune.ssl.default-dh-param 2048
+    ssl-default-bind-ciphers ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384
+    ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
+
+defaults
+    mode    http
+    balance roundrobin
+    option  dontlognull
+    option  httpclose
+    option  httplog
+    option  forwardfor
+    option  redispatch
+    retries 3
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         10s
+    timeout client          1m
+    timeout server          1m
+    timeout http-keep-alive 10s
+    timeout check           10s
+    maxconn 3000
+
+# Frontend for HTTP (redirect to HTTPS)
+frontend http_frontend
+    bind *:80
+    redirect scheme https code 301 if !{ ssl_fc }
+
+# Frontend for HTTPS (SSL termination)
+frontend https_frontend
+    bind *:443 ssl crt /etc/ssl/certs/$DOMAIN.pem
+    reqadd X-Forwarded-Proto:\ https
+    
+    # Default backend for www subdomain
+    default_backend web_servers
+
+# Backend web servers
+backend web_servers
+    balance roundrobin
+    option httpchk GET /
+    
+    # Health checks
+    option httpchk
+    http-check expect status 200
+    
+    # Backend servers
+    server web-01 $WEB01_IP:80 check
+    server web-02 $WEB02_IP:80 check
+
+# Stats interface
+listen stats
+    bind *:8080
+    stats enable
+    stats uri /stats
+    stats realm HAProxy\ Statistics
+    stats auth admin:password
+EOF
+
+# Test de la configuration
+echo "🔍 Testing HAProxy configuration..."
+sudo haproxy -f /etc/haproxy/haproxy.cfg -c
+
+# Démarrage de HAProxy
+echo "▶️  Starting HAProxy..."
+sudo systemctl start haproxy
+sudo systemctl enable haproxy
+
+# Configuration du renouvellement automatique
+echo "🔄 Setting up automatic certificate renewal..."
+sudo crontab -l 2>/dev/null | grep -v "certbot renew" | sudo crontab -
+echo "0 12 * * * /usr/bin/certbot renew --quiet --deploy-hook 'systemctl reload haproxy'" | sudo crontab -
+
+echo "✅ SSL termination setup completed!"
+echo "🌐 Your site should now be accessible at https://$DOMAIN"
+echo "📊 HAProxy stats available at http://your-server:8080/stats (admin:password)"
+
+# Tests finaux
+echo "🧪 Running final tests..."
+sleep 5
+
+echo "Testing HTTP redirect..."
+curl -sI "http://$DOMAIN" | grep -q "301\|302" && echo "✅ HTTP redirect works" || echo "❌ HTTP redirect failed"
+
+echo "Testing HTTPS connection..."
+curl -sI "https://$DOMAIN" | grep -q "200" && echo "✅ HTTPS connection works" || echo "❌ HTTPS connection failed"
+
+echo "🎉 Setup completed successfully!"
+EOF
